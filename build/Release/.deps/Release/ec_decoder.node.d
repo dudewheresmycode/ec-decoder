@@ -1,0 +1,1 @@
+cmd_Release/ec_decoder.node := c++ -bundle -undefined dynamic_lookup -Wl,-no_pie -Wl,-search_paths_first -mmacosx-version-min=10.7 -arch x86_64 -L./Release  -o Release/ec_decoder.node Release/obj.target/ec_decoder/src/main.o Release/obj.target/ec_decoder/src/decoder.o -lavformat -lavfilter -lavutil -lavcodec -lswscale -lz -lm
