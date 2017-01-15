@@ -44,10 +44,10 @@ CFLAGS_OBJC_Debug :=
 CFLAGS_OBJCC_Debug :=
 
 INCS_Debug := \
-	-I/Users/addroid/.node-gyp/6.9.3/include/node \
-	-I/Users/addroid/.node-gyp/6.9.3/src \
-	-I/Users/addroid/.node-gyp/6.9.3/deps/uv/include \
-	-I/Users/addroid/.node-gyp/6.9.3/deps/v8/include \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/include/node \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/src \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/deps/uv/include \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/deps/v8/include \
 	-I$(srcdir)/usr \
 	-I$(srcdir)/node_modules/nan
 
@@ -91,10 +91,10 @@ CFLAGS_OBJC_Release :=
 CFLAGS_OBJCC_Release :=
 
 INCS_Release := \
-	-I/Users/addroid/.node-gyp/6.9.3/include/node \
-	-I/Users/addroid/.node-gyp/6.9.3/src \
-	-I/Users/addroid/.node-gyp/6.9.3/deps/uv/include \
-	-I/Users/addroid/.node-gyp/6.9.3/deps/v8/include \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/include/node \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/src \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/deps/uv/include \
+	-I/Users/addroid/.node-gyp/iojs-1.4.1/deps/v8/include \
 	-I$(srcdir)/usr \
 	-I$(srcdir)/node_modules/nan
 

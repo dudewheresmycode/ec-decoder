@@ -1,12 +1,16 @@
 var decode = require('./build/Release/ec_decoder');
 var input = "/Users/addroid/Movies/SampleVideo_720x480_1mb.mp4";
+var YUVCanvas = require('yuv-canvas');
 
-var res = decode.config(input);
+var res = decode.config();
 console.log(res);
 setTimeout(function(){
   decode.start(input,
     function(d){
-      console.log('progress', d);
+      console.log('frame ready', d);
+      decode.frame(d, function(y,u,v,w,h){
+        console.log('buffer', buffer);
+      });
     },
     function(d){
       console.log('complete', d);

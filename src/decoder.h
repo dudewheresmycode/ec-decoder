@@ -21,15 +21,23 @@ using namespace v8;
 using namespace node;
 
 namespace extracast {
-  
+
 
   typedef struct YUVImage {
     // v8::Uint32 format;
     int w, h;
     int planes;
-    uint16_t *pitches;
-    uint8_t **pixels;
-  };
+
+    uint32_t pitchY;
+    uint32_t pitchU;
+    uint32_t pitchV;
+
+    uint8_t *avY;
+    uint8_t *avU;
+    uint8_t *avV;
+
+  } YUVImage;
+
   typedef struct IncodeInput {
     char *path;
   };
@@ -41,9 +49,11 @@ namespace extracast {
     v8::Local<v8::Integer> frameIndex;
     unsigned char *output;
     int output_size;
-    int rtn;
-    uint8_t *yuv_y;
+    //YUVImage rtn
+    v8::Local<v8::Value> yuv_y;
+    //uint8_t *yuv_y;
     size_t yuv_y_size;
+    YUVImage *bmp;
     //v8::Local<v8::Value> yuv_u;
     //v8::Local<v8::Value> yuv_v;
     size_t rsize;
@@ -52,7 +62,7 @@ namespace extracast {
   void ec_decode_buffer_async (uv_work_t *);
   void ec_decode_buffer_after (uv_work_t *);
   void ec_decode_buffer_flush (uv_work_t *);
-  void decode_video();
+  //void decode_video();
   #define ec_decode_flush_nogap_after ec_decode_buffer_after
 
 }
