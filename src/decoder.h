@@ -22,7 +22,6 @@ using namespace node;
 
 namespace extracast {
 
-
   typedef struct YUVImage {
     // v8::Uint32 format;
     int w, h;
@@ -36,11 +35,19 @@ namespace extracast {
     uint8_t *avU;
     uint8_t *avV;
 
+    size_t size_y;
+    size_t size_u;
+    size_t size_v;
+
   } YUVImage;
+
+  void extractYUV();
 
   typedef struct IncodeInput {
     char *path;
   };
+
+
   typedef struct DecodeRequest {
     uv_work_t req;
     char *input;
@@ -54,6 +61,7 @@ namespace extracast {
     //uint8_t *yuv_y;
     size_t yuv_y_size;
     YUVImage *bmp;
+    v8::Local<v8::Object> emitter;
     //v8::Local<v8::Value> yuv_u;
     //v8::Local<v8::Value> yuv_v;
     size_t rsize;

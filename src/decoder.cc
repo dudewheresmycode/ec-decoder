@@ -13,8 +13,16 @@ using namespace node;
 namespace extracast {
 
 
+  struct Emitter: Nan::ObjectWrap {
+    static NAN_METHOD(New);
+    static NAN_METHOD(Open);
+    static NAN_METHOD(Ping);
+  };
+
+
 
   int width, height;
+  YUVImage *yuv;
 
   AVFormatContext *pFormatCtx = NULL;
   int             i, videoStream, audioStream;
@@ -27,7 +35,7 @@ namespace extracast {
   int             frameFinished;
   uint8_t *buffer;
 
-  YUVImage *bmp;
+  //YUVImage *bmp;
   struct SwsContext   *sws_ctx            = NULL;
   // AVDictionary        *videoOptionsDict   = NULL;
 
@@ -91,10 +99,17 @@ namespace extracast {
     info.GetReturnValue().Set(Nan::New<String>("OK").ToLocalChecked());
   }
 
-  void f1(char const* const* a){}
+  Emitter* self;
 
-  NAN_METHOD(ec_decode_start) {
+  NAN_METHOD(Emitter::New) {
+    assert(info.IsConstructCall());
+    self = new Emitter();
+    self->Wrap(info.This());
 
+    info.GetReturnValue().Set(info.This());
+  }
+
+  NAN_METHOD(Emitter::Open) {
     String::Utf8Value cmd(info[0]);
     char *in = (*cmd);
     char *input = (char *)malloc(strlen(in) * sizeof(char));
@@ -104,34 +119,32 @@ namespace extracast {
     AsyncQueueWorker(new DecodeWorker(callback, input));
   }
 
-
-  NAN_METHOD(ec_decode_frame) {
+  // emits ping event
+  NAN_METHOD(Emitter::Ping) {
 
     DecodeRequest *request = new DecodeRequest;
     //request->input = input;
     request->req.data = request;
 
     //DecodeRequest *r = reinterpret_cast<DecodeRequest *>(request->data);
-    int frameIndex = info[0]->Uint32Value();
-    request->callback.Reset(info[1].As<Function>());
-
+    //int frameIndex = info[0]->Uint32Value();
+    //request->emitter = info.This();
+    request->callback.Reset(info[0].As<Function>());
     // set a circular pointer so we can get the "encode_req" back later
-    fprintf(stderr, "get buffered frames: %d\n", frameIndex);
+    //fprintf(stderr, "get buffered frames: %d\n", frameIndex);
 
     //decode_video();
 
-    uv_queue_work(uv_default_loop(), &request->req, ec_decode_buffer_async, (uv_after_work_cb)ec_decode_buffer_after);
-    // v8::Local<v8::Value> returnValue = Nan::CopyBuffer((char*)avFrameYUV->data[0], avFrameYUVSize).ToLocalChecked();
-    // info.GetReturnValue().Set(returnValue);
+    //!!uv_queue_work(uv_default_loop(), &request->req, ec_decode_buffer_async, (uv_after_work_cb)ec_decode_buffer_after);
 
-  }
+    // Handle<Value> argv[2] = {
+    //   Nan::New("ping").ToLocalChecked(), // event name
+    //   Nan::New<String>("Hello").ToLocalChecked()
+    //   //info[0]->ToString()  // argument
+    // };
 
+    // Nan::MakeCallback(info.This(), "emit", 2, argv);
 
-
-
-  void ec_decode_buffer_async (uv_work_t *req) {
-    DecodeRequest *r = (DecodeRequest *)req->data;
-    fprintf(stderr, "buffer!");
 
 
     videoStream=-1;
@@ -166,6 +179,8 @@ namespace extracast {
       fprintf(stderr, "find videoStream failed\n");
     }
 
+
+    yuv = new YUVImage;
     // Allocate video frame
     pFrame = av_frame_alloc();
     //avFrameYUV
@@ -191,6 +206,7 @@ namespace extracast {
          NULL,
          NULL
     );
+    //v8::Local<v8::Object> em = UnwrapPointer(r->emitter);
 
     i=0;
     while(av_read_frame(pFormatCtx, &packet)>=0) {
@@ -200,7 +216,7 @@ namespace extracast {
          // Decode video frame
          avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
          if(frameFinished) {
-           if(++i<=1){
+           if(++i<=240){
              fprintf(stderr, "frame: %d\n", i);
 
              //progress.Send(reinterpret_cast<const char*>(&i), sizeof(int));
@@ -242,6 +258,38 @@ namespace extracast {
             //
              sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
 
+             extractYUV();
+
+             v8::Local<v8::Value> argv[] = {
+               Nan::New("ping").ToLocalChecked(), // event name
+               Nan::CopyBuffer((char *)yuv->avY, yuv->size_y).ToLocalChecked(),
+               Nan::CopyBuffer((char *)yuv->avU, yuv->size_u).ToLocalChecked(),
+               Nan::CopyBuffer((char *)yuv->avV, yuv->size_v).ToLocalChecked(),
+               Nan::New<Integer>(yuv->pitchY),
+               Nan::New<Integer>(yuv->pitchU),
+               Nan::New<Integer>(yuv->pitchV),
+               Nan::New<Integer>(width),
+               Nan::New<Integer>(height)
+             };
+
+             Nan::MakeCallback(info.This(), "emit", 9, argv);
+
+             //Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, ((v8::Local<v8::Value>)argv));
+             //Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, argv);
+            //Nan::MakeCallback(Nan::ObjectWrap::Unwrap<Emitter>(self), "emit", 8, argv);
+
+            //  // cleanup
+            //  r->callback.Reset();
+
+
+
+            //  Handle<Value> argv[2] = {
+            //    Nan::New("ping").ToLocalChecked(), // event name
+            //    Nan::New<Integer>(i)
+            //    //info[0]->ToString()  // argument
+            //  };
+            //  Nan::MakeCallback(em, "emit", 2, argv);
+
              //avpicture_fill((AVPicture *)avFrameYUV, pFrame->data[0], pix_fmt, pCodecCtx->width, pCodecCtx->height);
 
 
@@ -270,6 +318,70 @@ namespace extracast {
        }
     }
 
+    //flush last frame
+    v8::Local<v8::Value> argv[] = {
+      Nan::CopyBuffer((char *)yuv->avY, yuv->size_y).ToLocalChecked(),
+      Nan::CopyBuffer((char *)yuv->avU, yuv->size_u).ToLocalChecked(),
+      Nan::CopyBuffer((char *)yuv->avV, yuv->size_v).ToLocalChecked(),
+      Nan::New<Integer>(yuv->pitchY),
+      Nan::New<Integer>(yuv->pitchU),
+      Nan::New<Integer>(yuv->pitchV),
+      Nan::New<Integer>(width),
+      Nan::New<Integer>(height)
+    };
+
+    Nan::New(request->callback)->Call(Nan::GetCurrentContext()->Global(), 8, argv);
+
+    // cleanup
+    request->callback.Reset();
+    delete yuv;
+    delete request;
+
+  }
+
+
+  NAN_METHOD(ec_decode_start) {
+
+    String::Utf8Value cmd(info[0]);
+    char *in = (*cmd);
+    char *input = (char *)malloc(strlen(in) * sizeof(char));
+    strcpy(input, in);
+
+    Callback *callback = new Callback(info[1].As<v8::Function>());
+    AsyncQueueWorker(new DecodeWorker(callback, input));
+  }
+
+
+  NAN_METHOD(ec_decode_frame) {
+
+    DecodeRequest *request = new DecodeRequest;
+    //request->input = input;
+    request->req.data = request;
+
+    //DecodeRequest *r = reinterpret_cast<DecodeRequest *>(request->data);
+    int frameIndex = info[0]->Uint32Value();
+    request->callback.Reset(info[1].As<Function>());
+
+    // set a circular pointer so we can get the "encode_req" back later
+    fprintf(stderr, "get buffered frames: %d\n", frameIndex);
+
+    //decode_video();
+
+    //uv_queue_work(uv_default_loop(), &request->req, ec_decode_buffer_async, (uv_after_work_cb)ec_decode_buffer_after);
+
+    // v8::Local<v8::Value> returnValue = Nan::CopyBuffer((char*)avFrameYUV->data[0], avFrameYUVSize).ToLocalChecked();
+    // info.GetReturnValue().Set(returnValue);
+
+  }
+
+
+
+
+  void ec_decode_buffer_async (uv_work_t *req) {
+    DecodeRequest *r = (DecodeRequest *)req->data;
+    fprintf(stderr, "buffer!");
+
+
 
     //r->yuv_y = Nan::CopyBuffer((char*)avFrameYUV->data[0], avFrameYUVSize).ToLocalChecked();
     //av_init_packet(&packet);
@@ -278,57 +390,47 @@ namespace extracast {
     //r->rtn = 5;
   }
 
+
+  void extractYUV(){
+
+    yuv->pitchY = avFrameCopy->linesize[0];
+    yuv->pitchU = avFrameCopy->linesize[1];
+    yuv->pitchV = avFrameCopy->linesize[2];
+
+    yuv->avY = avFrameCopy->data[0];
+    yuv->avU = avFrameCopy->data[1];
+    yuv->avV = avFrameCopy->data[2];
+
+    yuv->size_y = (avFrameCopy->linesize[0] * pCodecCtx->height);
+    yuv->size_u = (avFrameCopy->linesize[1] * pCodecCtx->height / 2);
+    yuv->size_v = (avFrameCopy->linesize[2] * pCodecCtx->height / 2);
+
+  }
   void ec_decode_buffer_after (uv_work_t *req) {
     Nan::HandleScope scope;
     DecodeRequest *r = (DecodeRequest *)req->data;
 
-    uint32_t pitchY = avFrameCopy->linesize[0];
-    uint32_t pitchU = avFrameCopy->linesize[1];
-    uint32_t pitchV = avFrameCopy->linesize[2];
-
-    uint8_t *avY = avFrameCopy->data[0];
-    uint8_t *avU = avFrameCopy->data[1];
-    uint8_t *avV = avFrameCopy->data[2];
-    //
-    // Handle<Value> argv[1];
-    // argv[0] = Nan::New<Integer>(r->rtn);
-    //Local<v8::Object> wrapper = WrapPointer(bmp);
-    size_t size_y = (avFrameCopy->linesize[0] * pCodecCtx->height);
-    size_t size_u = (avFrameCopy->linesize[1] * pCodecCtx->height / 2);
-    size_t size_v = (avFrameCopy->linesize[2] * pCodecCtx->height / 2);
-
-
-//    fprintf(stderr, "size_y: %d\n", avFrameRGB->data[0]);
-    //char *buffer = (char *)avFrameRGB->data[0];
-     //char * buf5 = malloc(avFrameRGBSize)
-    // size_t bSize = sizeof(buffer);
-
-    // int avpicture_layout(avFrameRGB, pix_fmt,
-    //                      width, height,
-    //                      buf5, avFrameRGBSize);
-
-    v8::Local<v8::Value> argv[] = {
-      //Nan::CopyBuffer(buf5, avFrameCopySize).ToLocalChecked(),
-      Nan::CopyBuffer((char *)avY, size_y).ToLocalChecked(),
-      Nan::CopyBuffer((char *)avU, size_u).ToLocalChecked(),
-      Nan::CopyBuffer((char *)avV, size_v).ToLocalChecked(),
-//      Nan::New<Integer>(avFrameRGB->linesize[0]),
-      Nan::New<Integer>(pitchY),
-      Nan::New<Integer>(pitchU),
-      Nan::New<Integer>(pitchV),
-
-      Nan::New<Integer>(width),
-      Nan::New<Integer>(height)
-      //Nan::CopyBuffer(r->yuv_y, r->yuv_y_size).ToLocalChecked()
-    };
-
-
     Nan::TryCatch try_catch;
 
+
+    //flush last frame
+    v8::Local<v8::Value> argv[] = {
+      Nan::CopyBuffer((char *)yuv->avY, yuv->size_y).ToLocalChecked(),
+      Nan::CopyBuffer((char *)yuv->avU, yuv->size_u).ToLocalChecked(),
+      Nan::CopyBuffer((char *)yuv->avV, yuv->size_v).ToLocalChecked(),
+      Nan::New<Integer>(yuv->pitchY),
+      Nan::New<Integer>(yuv->pitchU),
+      Nan::New<Integer>(yuv->pitchV),
+      Nan::New<Integer>(width),
+      Nan::New<Integer>(height)
+    };
+
+    //Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, ((v8::Local<v8::Value>)argv));
     Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, argv);
 
     // cleanup
     r->callback.Reset();
+    delete yuv;
     delete r;
 
     if (try_catch.HasCaught()) {
@@ -373,6 +475,10 @@ namespace extracast {
   void ec_decode_buffer_flush (uv_work_t *req) {
 
   }
+  NAN_METHOD(ec_flush){
+
+    info.GetReturnValue().Set(Nan::New<String>("OK").ToLocalChecked());
+  }
 
 
   void ec_decoder_init(Handle<Object> target){
@@ -384,6 +490,15 @@ namespace extracast {
     Nan::SetMethod(target, "frame", ec_decode_frame);
     Nan::SetMethod(target, "start", ec_decode_start);
     Nan::SetMethod(target, "destroy", ec_teardown);
+
+    Local<FunctionTemplate> t = Nan::New<FunctionTemplate>(Emitter::New);
+    t->InstanceTemplate()->SetInternalFieldCount(1);
+
+    t->SetClassName(Nan::New("Emitter").ToLocalChecked());
+    Nan::SetPrototypeMethod(t, "open", Emitter::Open);
+    Nan::SetPrototypeMethod(t, "ping", Emitter::Ping);
+
+    Nan::Set(target, Nan::New("Emitter").ToLocalChecked(), t->GetFunction());
     //Nan::SetMethod(target, "init_params", node_init_params);
   }
 
