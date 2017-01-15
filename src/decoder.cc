@@ -23,7 +23,7 @@ namespace extracast {
   AVCodec         *pCodec = NULL;
   AVFrame         *pFrame = NULL;
   AVPacket        packet;
-
+  AVPixelFormat   pix_fmt = AV_PIX_FMT_YUV420P; //AV_PIX_FMT_YUV420P; //AV_PIX_FMT_RGB24;
   int             frameFinished;
   uint8_t *buffer;
 
@@ -33,8 +33,8 @@ namespace extracast {
 
   AVFrame         *avFrameYUV = NULL;
   size_t          avFrameYUVSize;
-  AVFrame         *avFrameRGB = NULL;
-  size_t          avFrameRGBSize;
+  AVFrame         *avFrameCopy = NULL;
+  size_t          avFrameCopySize;
 
   class DecodeWorker : public AsyncWorker {
    public:
@@ -169,15 +169,15 @@ namespace extracast {
     // Allocate video frame
     pFrame = av_frame_alloc();
     //avFrameYUV
-    avFrameRGB = av_frame_alloc();
+    avFrameCopy = av_frame_alloc();
 
     width = pCodecCtx->width;
     height = pCodecCtx->height;
 
-    int size = avpicture_get_size(AV_PIX_FMT_RGB24, width, height);
+    int size = avpicture_get_size(pix_fmt, width, height);
     uint8_t* buffer = (uint8_t*)av_malloc(size);
 
-    avpicture_fill((AVPicture *)avFrameRGB, buffer, AV_PIX_FMT_RGB24, width, height);
+    avpicture_fill((AVPicture *)avFrameCopy, buffer, pix_fmt, width, height);
 
     // initialize SWS context for software scaling
     sws_ctx = sws_getContext(height,
@@ -185,7 +185,7 @@ namespace extracast {
          pCodecCtx->pix_fmt,
          pCodecCtx->width,
          pCodecCtx->height,
-         AV_PIX_FMT_RGB24,
+         pix_fmt,
          SWS_BILINEAR,
          NULL,
          NULL,
@@ -207,7 +207,7 @@ namespace extracast {
             //  progress.Send(i, sizeof(int));
              //AVPicture pict = av_frame_alloc();
 
-            avFrameRGBSize = avpicture_get_size(AV_PIX_FMT_RGB24, pCodecCtx->width, pCodecCtx->height);
+            avFrameCopySize = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
 
 
             // AVPicture pict;
@@ -230,7 +230,7 @@ namespace extracast {
 
              //AVPicture* pict = (AVPicture *)avFrameYUV;
             //r->bmp = new YUVImage;
-            //int nbytes = avpicture_get_size(AV_PIX_FMT_RGB24, pCodecCtx->width, pCodecCtx->height);
+            //int nbytes = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
             //uint8_t* outbuffer = (uint8_t*)av_malloc(nbytes*sizeof(uint8_t));
 
             // avFrameYUV->linesize[0] = r->bmp->pitchY;
@@ -240,11 +240,12 @@ namespace extracast {
             // avFrameYUV->data[1] = r->bmp->avU;
             // avFrameYUV->data[2] = r->bmp->avV;
             //
-             sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameRGB->data, avFrameRGB->linesize);
-             //avpicture_fill((AVPicture *)avFrameYUV, pFrame->data[0], AV_PIX_FMT_YUV420P, pCodecCtx->width, pCodecCtx->height);
+             sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
+
+             //avpicture_fill((AVPicture *)avFrameYUV, pFrame->data[0], pix_fmt, pCodecCtx->width, pCodecCtx->height);
 
 
-            //  if(avpicture_fill((AVPicture*) avFrameYUV, outbuffer, AV_PIX_FMT_YUV420P, pCodecCtx->width, pCodecCtx->height) < 0){
+            //  if(avpicture_fill((AVPicture*) avFrameYUV, outbuffer, pix_fmt, pCodecCtx->width, pCodecCtx->height) < 0){
             //    fprintf(stderr, "avpicture error\n");
             //  }
              //
@@ -281,32 +282,40 @@ namespace extracast {
     Nan::HandleScope scope;
     DecodeRequest *r = (DecodeRequest *)req->data;
 
-    // uint32_t pitchY = avFrameYUV->linesize[0];
-    // uint32_t pitchU = avFrameYUV->linesize[1];
-    // uint32_t pitchV = avFrameYUV->linesize[2];
-    //
-    // uint8_t *avY = avFrameYUV->data[0];
-    // uint8_t *avU = avFrameYUV->data[1];
-    // uint8_t *avV = avFrameYUV->data[2];
+    uint32_t pitchY = avFrameCopy->linesize[0];
+    uint32_t pitchU = avFrameCopy->linesize[1];
+    uint32_t pitchV = avFrameCopy->linesize[2];
+
+    uint8_t *avY = avFrameCopy->data[0];
+    uint8_t *avU = avFrameCopy->data[1];
+    uint8_t *avV = avFrameCopy->data[2];
     //
     // Handle<Value> argv[1];
     // argv[0] = Nan::New<Integer>(r->rtn);
     //Local<v8::Object> wrapper = WrapPointer(bmp);
-    // size_t size_y = (avFrameYUV->linesize[0] * pCodecCtx->height);
-    // size_t size_u = (avFrameYUV->linesize[1] * pCodecCtx->height / 2);
-    // size_t size_v = (avFrameYUV->linesize[2] * pCodecCtx->height / 2);
+    size_t size_y = (avFrameCopy->linesize[0] * pCodecCtx->height);
+    size_t size_u = (avFrameCopy->linesize[1] * pCodecCtx->height / 2);
+    size_t size_v = (avFrameCopy->linesize[2] * pCodecCtx->height / 2);
 
 
 //    fprintf(stderr, "size_y: %d\n", avFrameRGB->data[0]);
-    char *buffer = (char *)avFrameRGB->data[0];
-    size_t bSize = sizeof(buffer);
+    //char *buffer = (char *)avFrameRGB->data[0];
+     //char * buf5 = malloc(avFrameRGBSize)
+    // size_t bSize = sizeof(buffer);
+
+    // int avpicture_layout(avFrameRGB, pix_fmt,
+    //                      width, height,
+    //                      buf5, avFrameRGBSize);
+
     v8::Local<v8::Value> argv[] = {
-      Nan::CopyBuffer(buffer, (avFrameRGB->linesize[0]*height)).ToLocalChecked(),
-      //Nan::CopyBuffer((char *)avFrameYUV->data[1], size_u).ToLocalChecked(),
-      //Nan::CopyBuffer((char *)avFrameYUV->data[2], size_v).ToLocalChecked(),
-      Nan::New<Integer>(avFrameRGB->linesize[0]),
-      //Nan::New<Integer>(pitchU),
-      //Nan::New<Integer>(pitchV),
+      //Nan::CopyBuffer(buf5, avFrameCopySize).ToLocalChecked(),
+      Nan::CopyBuffer((char *)avY, size_y).ToLocalChecked(),
+      Nan::CopyBuffer((char *)avU, size_u).ToLocalChecked(),
+      Nan::CopyBuffer((char *)avV, size_v).ToLocalChecked(),
+//      Nan::New<Integer>(avFrameRGB->linesize[0]),
+      Nan::New<Integer>(pitchY),
+      Nan::New<Integer>(pitchU),
+      Nan::New<Integer>(pitchV),
 
       Nan::New<Integer>(width),
       Nan::New<Integer>(height)
@@ -316,7 +325,7 @@ namespace extracast {
 
     Nan::TryCatch try_catch;
 
-    Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 4, argv);
+    Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, argv);
 
     // cleanup
     r->callback.Reset();
