@@ -7,14 +7,22 @@
 extern "C" {
   #include <libavcodec/avcodec.h>
   #include <libavformat/avformat.h>
-  #include <libavfilter/avfiltergraph.h>
-  #include <libavfilter/buffersink.h>
-  #include <libavfilter/buffersrc.h>
-  #include <libavutil/opt.h>
-  #include <libavutil/pixdesc.h>
-  #include <libavutil/mathematics.h>
-  #include <libavutil/imgutils.h>
+  #include <libavformat/avio.h>
   #include <libswscale/swscale.h>
+  #include <libavutil/avstring.h>
+  #include <libavutil/time.h>
+
+  // #include <libavcodec/avcodec.h>
+  // #include <libavformat/avformat.h>
+  // #include <libavformat/avio.h>
+  // #include <libavfilter/avfiltergraph.h>
+  // #include <libavfilter/buffersink.h>
+  // #include <libavfilter/buffersrc.h>
+  // #include <libavutil/opt.h>
+  // #include <libavutil/pixdesc.h>
+  // #include <libavutil/mathematics.h>
+  // #include <libavutil/imgutils.h>
+  // #include <libswscale/swscale.h>
 }
 
 using namespace v8;
@@ -43,9 +51,23 @@ namespace extracast {
 
   void extractYUV();
 
+  static char *time_value_string(char *, int, int64_t);
+  static char *value_string(char *, int, double, const char *);
+
   typedef struct IncodeInput {
     char *path;
+    char *duration;
+    int width;
+    int height;
+    char *codec;
+    char *codec_long;
   };
+
+  typedef struct PacketQueue {
+    AVPacketList *first_pkt, *last_pkt;
+    int nb_packets;
+    int size;
+  } PacketQueue;
 
 
   typedef struct DecodeRequest {
