@@ -25,14 +25,6 @@ namespace extracast {
   static const char *binary_unit_prefixes [] = { "", "Ki", "Mi", "Gi", "Ti", "Pi" };
   static const char *decimal_unit_prefixes[] = { "", "K" , "M" , "G" , "T" , "P"  };
 
-  struct Emitter: Nan::ObjectWrap {
-    static NAN_METHOD(New);
-    static NAN_METHOD(Open);
-    static NAN_METHOD(Ping);
-    static NAN_METHOD(ReadFrame);
-
-  };
-
 
 
   int width, height;
@@ -47,6 +39,7 @@ namespace extracast {
   AVPacket        packet;
   AVPixelFormat   pix_fmt = AV_PIX_FMT_YUV420P; //AV_PIX_FMT_YUV420P; //AV_PIX_FMT_RGB24;
   int             frameFinished;
+  int             shouldQuit;
   uint8_t *buffer;
 
   //YUVImage *bmp;
@@ -65,20 +58,6 @@ namespace extracast {
 #define MAX_VIDEOQ_SIZE (5 * 256 * 1024)
 #define VIDEO_PICTURE_QUEUE_SIZE 1
 
-  //vector <YUVImage> frames;
-
-
-  // int our_get_buffer(struct AVCodecContext *c, AVFrame *pic, int flags) {
-  //   int ret = avcodec_default_get_buffer(c, pic);
-  //   uint64_t *pts = av_malloc(sizeof(uint64_t));
-  //   *pts = global_video_pkt_pts;
-  //   pic->opaque = pts;
-  //   return ret;
-  // }
-  // void our_release_buffer(struct AVCodecContext *c, AVFrame *pic) {
-  //   if(pic) av_freep(&pic->opaque);
-  //   avcodec_default_release_buffer(c, pic);
-  // }
 
   void packet_queue_init(PacketQueue *q) {
     memset(q, 0, sizeof(PacketQueue));
@@ -160,41 +139,53 @@ namespace extracast {
 
     void Execute () {
       //Sleep(1000);
-      AVPacket pkt1, *packet = &pkt1;
-      int frameFinished;
-      double pts;
-      pFrame = av_frame_alloc();
-      yuv = new YUVImage;
-      fprintf(stderr, "exec!\n");
-      int i=0;
-      for(;;) {
 
-        if(packet_queue_get(&videoq, packet, 1) < 0) {
-          // means we quit getting packets
-          fprintf(stderr, "quit getting packets!\n");
-          break;
+      fprintf(stderr, "queue size: %d\n", videoq.nb_packets);
+
+      if(videoq.nb_packets > 0){
+
+        AVPacket pkt1, *packet = &pkt1;
+        int frameFinished;
+        double pts;
+
+        pFrame = av_frame_alloc();
+        yuv = new YUVImage;
+
+        int i=0;
+        for(;;) {
+          if(shouldQuit){
+            fprintf(stderr, "no more frames!\n");
+            break;
+          }
+          if(packet_queue_get(&videoq, packet, 1) < 0) {
+            // means we quit getting packets
+            fprintf(stderr, "quit getting packets!\n");
+            break;
+          }
+          //fprintf(stderr, "decode...%d\n", packet);
+
+
+          avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, packet);
+          if(frameFinished) {
+            //fprintf(stderr, "decoded !\n");
+            avFrameCopySize = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
+            sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
+            extractYUV();
+            //got a frame.. call it back now
+            break;
+          }
+          //no frame found.. free this packet and loop again ...
+          av_free_packet(packet);
+          // if(i >= 10){
+          //   break;
+          // }
+          i++;
+
         }
-        //fprintf(stderr, "decode...%d\n", packet);
-
-
-        avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, packet);
-        if(frameFinished) {
-          fprintf(stderr, "decoded !\n");
-          avFrameCopySize = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
-          sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
-          extractYUV();
-          //got a frame.. call it back now
-          break;
-        }
-        //no frame found.. free this packet and loop again ...
-        av_free_packet(packet);
-        // if(i >= 10){
-        //   break;
-        // }
-        i++;
-
+        av_frame_free(&pFrame);
+      }else{
+        fprintf(stderr, "no more packets...\n");
       }
-      av_frame_free(&pFrame);
 
     //   for(;;) {
     //     if(packet_queue_get(&videoq, packet, 1) < 0) {
@@ -263,9 +254,10 @@ namespace extracast {
         Nan::CopyBuffer((char *)yuv->avV, yuv->size_v).ToLocalChecked(),
         Nan::New<Integer>(yuv->pitchY),
         Nan::New<Integer>(yuv->pitchU),
-        Nan::New<Integer>(yuv->pitchV)
+        Nan::New<Integer>(yuv->pitchV),
+        Nan::New<Integer>(videoq.nb_packets)
       };
-      callback->Call(6, argv);
+      callback->Call(7, argv);
       delete yuv;
     }
 
@@ -339,16 +331,17 @@ namespace extracast {
           for(;;) {
             // seek stuff goes here
             if(videoq.size > MAX_VIDEOQ_SIZE) {
-              fprintf(stderr, "max queue size.. waiting 10ms %d\n", i);
-              Sleep(1000); //sleep for a second?
+              //fprintf(stderr, "max queue size.. waiting 10ms %d\n", i);
+              Sleep(100); //sleep for a second?
               continue;
             }
 
             if(av_read_frame(pFormatCtx, packet) < 0) {
               if(pFormatCtx->pb->error == 0) {
-                fprintf(stderr, "no error.. sleeping %d\n", i);
-        	       Sleep(100); /* no error; wait for user input */
-                 continue;
+                //fprintf(stderr, "no error.. sleeping %d\n", i);
+                continue;
+        	       //Sleep(100); /* no error; wait for user input */
+                 //continue;
               } else {
         	       break;
               }
@@ -356,9 +349,8 @@ namespace extracast {
 
             // Is this a packet from the video stream?
             if(packet->stream_index == videoStream) {
-              //fprintf(stderr, "put: %d\n", frameIndex);
-              packet_queue_put(&videoq, packet);
               frameIndex++;
+              packet_queue_put(&videoq, packet);
               progress.Signal();
             // } else if(packet->stream_index == is->audioStream) {
             //   packet_queue_put(&is->audioq, packet);
@@ -372,6 +364,7 @@ namespace extracast {
           }
 
 
+          shouldQuit=1;
           // i=0;
           // while(av_read_frame(pFormatCtx, &packet)>=0) {
           // //if(av_read_frame(pFormatCtx, &packet) >=0){
@@ -402,11 +395,16 @@ namespace extracast {
 
           //delete yuv;
     }
-
+    void HandleOKCallback(){
+      v8::Local<v8::Value> argv[] = {
+        Nan::New<Integer>(videoq.nb_packets)
+      };
+      progress->Call(1, argv);
+    }
     void HandleProgressCallback(const char *data, size_t size) {
       Nan::HandleScope scope;
       v8::Local<v8::Value> argv[] = {
-        Nan::New<Integer>(frameIndex)
+        Nan::New<Integer>(videoq.nb_packets)
       };
       // v8::Local<v8::Value> argv[] = {
       //   //Nan::New("ping").ToLocalChecked(), // event name

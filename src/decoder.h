@@ -63,6 +63,15 @@ namespace extracast {
     char *codec_long;
   };
 
+  struct Emitter: Nan::ObjectWrap {
+    static NAN_METHOD(New);
+    static NAN_METHOD(Open);
+    static NAN_METHOD(Ping);
+    static NAN_METHOD(ReadFrame);
+
+  };
+  
+
   typedef struct PacketQueue {
     AVPacketList *first_pkt, *last_pkt;
     int nb_packets;
