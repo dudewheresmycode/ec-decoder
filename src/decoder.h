@@ -7,14 +7,22 @@
 extern "C" {
   #include <libavcodec/avcodec.h>
   #include <libavformat/avformat.h>
-  #include <libavfilter/avfiltergraph.h>
-  #include <libavfilter/buffersink.h>
-  #include <libavfilter/buffersrc.h>
-  #include <libavutil/opt.h>
-  #include <libavutil/pixdesc.h>
-  #include <libavutil/mathematics.h>
-  #include <libavutil/imgutils.h>
+  #include <libavformat/avio.h>
   #include <libswscale/swscale.h>
+  #include <libavutil/avstring.h>
+  #include <libavutil/time.h>
+
+  // #include <libavcodec/avcodec.h>
+  // #include <libavformat/avformat.h>
+  // #include <libavformat/avio.h>
+  // #include <libavfilter/avfiltergraph.h>
+  // #include <libavfilter/buffersink.h>
+  // #include <libavfilter/buffersrc.h>
+  // #include <libavutil/opt.h>
+  // #include <libavutil/pixdesc.h>
+  // #include <libavutil/mathematics.h>
+  // #include <libavutil/imgutils.h>
+  // #include <libswscale/swscale.h>
 }
 
 using namespace v8;
@@ -22,7 +30,12 @@ using namespace node;
 
 namespace extracast {
 
-
+  typedef struct AudioFrame {
+    uint8_t *left;
+    uint8_t *right;
+    size_t size_left;
+    size_t size_right;
+  };
   typedef struct YUVImage {
     // v8::Uint32 format;
     int w, h;
@@ -36,11 +49,42 @@ namespace extracast {
     uint8_t *avU;
     uint8_t *avV;
 
-  } YUVImage;
+    size_t size_y;
+    size_t size_u;
+    size_t size_v;
+
+  };
+
+  void extractYUV();
+
+  static char *time_value_string(char *, int, int64_t);
+  static char *value_string(char *, int, double, const char *);
 
   typedef struct IncodeInput {
     char *path;
+    char *duration;
+    int width;
+    int height;
+    char *codec;
+    char *codec_long;
   };
+
+  struct Emitter: Nan::ObjectWrap {
+    static NAN_METHOD(New);
+    static NAN_METHOD(Open);
+    static NAN_METHOD(Decode);
+    static NAN_METHOD(ReadFrame);
+    static NAN_METHOD(ReadAudio);
+  };
+
+
+  typedef struct PacketQueue {
+    AVPacketList *first_pkt, *last_pkt;
+    int nb_packets;
+    int size;
+  } PacketQueue;
+
+
   typedef struct DecodeRequest {
     uv_work_t req;
     char *input;
@@ -54,6 +98,7 @@ namespace extracast {
     //uint8_t *yuv_y;
     size_t yuv_y_size;
     YUVImage *bmp;
+    v8::Local<v8::Object> emitter;
     //v8::Local<v8::Value> yuv_u;
     //v8::Local<v8::Value> yuv_v;
     size_t rsize;
