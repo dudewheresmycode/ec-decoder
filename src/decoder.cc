@@ -26,10 +26,15 @@ namespace extracast {
   static const char *decimal_unit_prefixes[] = { "", "K" , "M" , "G" , "T" , "P"  };
 
 
+  #define MAX_AUDIOQ_SIZE (5 * 16 * 1024)
+  #define MAX_VIDEOQ_SIZE (5 * 256 * 1024)
+  #define VIDEO_PICTURE_QUEUE_SIZE 1
+  #define SDL_AUDIO_BUFFER_SIZE 1024
+  #define MAX_AUDIO_FRAME_SIZE 192000
 
-  int width, height;
+  int width, height, owidth, oheight;
   YUVImage *yuv;
-
+  double vpts;
   AVFormatContext *pFormatCtx = NULL;
   int             i, videoStream, audioStream;
   AVCodecContext  *pCodecCtxOrig = NULL;
@@ -37,6 +42,22 @@ namespace extracast {
   AVCodec         *pCodec = NULL;
   AVFrame         *pFrame = NULL;
   AVPacket        packet;
+
+  //uint8_t *stream;
+  AudioFrame  *audioData;
+
+  uint8_t         audio_buf[(MAX_AUDIO_FRAME_SIZE * 3) / 2];
+  unsigned int    audio_buf_size;
+  unsigned int    audio_buf_index;
+  AVFrame         audio_frame;
+  AVPacket        audio_pkt;
+  uint8_t         *audio_pkt_data;
+  int             audio_pkt_size;
+  AVCodecContext  *aCodecCtxOrig = NULL;
+  AVCodecContext  *aCodecCtx = NULL;
+  AVCodec         *aCodec = NULL;
+  int             audioLen;
+
   AVPixelFormat   pix_fmt = AV_PIX_FMT_YUV420P; //AV_PIX_FMT_YUV420P; //AV_PIX_FMT_RGB24;
   int             frameFinished;
   int             shouldQuit;
@@ -50,13 +71,11 @@ namespace extracast {
   // size_t          avFrameYUVSize;
   AVFrame         *avFrameCopy = NULL;
   size_t          avFrameCopySize;
+
   PacketQueue     videoq;
+  PacketQueue     audioq;
 
 
-
-#define MAX_AUDIOQ_SIZE (5 * 16 * 1024)
-#define MAX_VIDEOQ_SIZE (5 * 256 * 1024)
-#define VIDEO_PICTURE_QUEUE_SIZE 1
 
 
   void packet_queue_init(PacketQueue *q) {
@@ -106,7 +125,6 @@ namespace extracast {
 
       pkt1 = q->first_pkt;
       if (pkt1) {
-        fprintf(stderr, "found packet\n");
         q->first_pkt = pkt1->next;
         if (!q->first_pkt) q->last_pkt = NULL;
         q->nb_packets--;
@@ -120,8 +138,8 @@ namespace extracast {
         ret = 0;
         break;
       } else {
-        fprintf(stderr, "sdl wait.. \n");
-        Sleep(100); //wait 100ms? no SDL
+        fprintf(stderr, "sdl wait.. ?\n");
+        Sleep(100); //wait 100ms? no SDL_CondWait here, so i put a random sleep?...?
         ret = 0; //????
         break; //????
         //SDL_CondWait(q->cond, q->mutex);
@@ -130,6 +148,207 @@ namespace extracast {
     //SDL_UnlockMutex(q->mutex);
     return ret;
   }
+
+  int audio_decode_frame(AVCodecContext *aCodecCtx, uint8_t *audio_buf, int buf_size) {
+
+    static AVPacket pkt;
+    static uint8_t *audio_pkt_data = NULL;
+    static int audio_pkt_size = 0;
+    static AVFrame frame;
+
+    int len1, data_size = 0;
+
+    for(;;) {
+      while(audio_pkt_size > 0) {
+        int got_frame = 0;
+        len1 = avcodec_decode_audio4(aCodecCtx, &frame, &got_frame, &pkt);
+        if(len1 < 0) {
+          /* if error, skip frame */
+          audio_pkt_size = 0;
+          break;
+        }
+        audio_pkt_data += len1;
+        audio_pkt_size -= len1;
+        data_size = 0;
+        if(got_frame) {
+  	       data_size = av_samples_get_buffer_size(NULL, aCodecCtx->channels, frame.nb_samples, aCodecCtx->sample_fmt, 1);
+           assert(data_size <= buf_size);
+           memcpy(audio_buf, frame.data[0], data_size);
+        }
+        if(data_size <= 0) {
+  	       /* No data yet, get more frames */
+  	      continue;
+        }
+        /* We have data, return it and come back for more later */
+        return data_size;
+      }
+      if(pkt.data)
+        av_free_packet(&pkt);
+
+      if(shouldQuit) {
+        return -1;
+      }
+
+      if(packet_queue_get(&audioq, &pkt, 1) < 0) {
+        return -1;
+      }
+      audio_pkt_data = pkt.data;
+      audio_pkt_size = pkt.size;
+    }
+  }
+  // void audio_callback(void *userdata, uint8_t *stream, int len) {
+  //
+  //   AVCodecContext *aCodecCtx = (AVCodecContext *)userdata;
+  //   int len1, audio_size;
+  //
+  //   //static uint8_t audio_buf[(MAX_AUDIO_FRAME_SIZE * 3) / 2];
+  //   static unsigned int audio_buf_size = 0;
+  //   static unsigned int audio_buf_index = 0;
+  //
+  //   while(len > 0) {
+  //     if(audio_buf_index >= audio_buf_size) {
+  //       /* We have already sent all our data; get more */
+  //       audio_size = audio_decode_frame(aCodecCtx, audio_buf, sizeof(audio_buf));
+  //       if(audio_size < 0) {
+  // 	/* If error, output silence */
+  // 	audio_buf_size = 1024; // arbitrary?
+  // 	memset(audio_buf, 0, audio_buf_size);
+  //       } else {
+  // 	audio_buf_size = audio_size;
+  //       }
+  //       audio_buf_index = 0;
+  //     }
+  //     len1 = audio_buf_size - audio_buf_index;
+  //     if(len1 > len)
+  //       len1 = len;
+  //     memcpy(stream, (uint8_t *)audio_buf + audio_buf_index, len1);
+  //     len -= len1;
+  //     stream += len1;
+  //     audio_buf_index += len1;
+  //   }
+  // }
+  //
+
+
+  class AudioWorker : public AsyncWorker {
+   public:
+    AudioWorker(Callback *callback, int len)
+      : AsyncWorker(callback), len(len) {}
+    ~AudioWorker() {}
+
+    void Execute () {
+      audioData = new AudioFrame;
+      //int len1, audio_size;
+      //
+      // //static uint8_t audio_buf[(MAX_AUDIO_FRAME_SIZE * 3) / 2];
+      static unsigned int audio_buf_size = 0;
+      static unsigned int audio_buf_index = 0;
+      // //stream = (uint8_t *)malloc((size_t)len);
+      // //audioLen = len;
+
+      static AVPacket pkt;
+      static uint8_t *audio_pkt_data = NULL;
+      static int audio_pkt_size = 0;
+      static AVFrame frame;
+
+      int len1, data_size = 0;
+      //AVCodecContext *aCodecCtx, uint8_t *audio_buf, int buf_size
+
+      for(;;) {
+        fprintf(stderr, "loop: \n");
+
+        while(audio_pkt_size > 0) {
+          int got_frame = 0;
+          len1 = avcodec_decode_audio4(aCodecCtx, &frame, &got_frame, &pkt);
+          if(len1 < 0) {
+            /* if error, skip frame */
+            audio_pkt_size = 0;
+            break;
+          }
+          audio_pkt_data += len1;
+          audio_pkt_size -= len1;
+          data_size = 0;
+          if(got_frame) {
+    	       data_size = av_samples_get_buffer_size(NULL, aCodecCtx->channels, frame.nb_samples, aCodecCtx->sample_fmt, 1);
+             //assert(data_size <= buf_size);
+             fprintf(stderr, "audio size: %d\n", data_size);
+             //memcpy(audioData->left, frame.data[0], data_size);
+             audioData->left = frame.data[0];
+             audioData->size_left = data_size;
+          }
+          if(data_size <= 0) {
+    	       /* No data yet, get more frames */
+    	      continue;
+          }
+          /* We have data, return it and come back for more later */
+          //return data_size;
+          break;
+        }
+        if(data_size > 0){
+          break;
+        }
+        if(pkt.data)
+          av_free_packet(&pkt);
+
+
+        if(packet_queue_get(&audioq, &pkt, 1) < 0) {
+          break;
+        }
+        audio_pkt_data = pkt.data;
+        audio_pkt_size = pkt.size;
+        fprintf(stderr, "audio_pkt_size: %d\n", audio_pkt_size);
+      }
+
+
+      //while(len > 0) {
+        // if(audio_buf_index >= audio_buf_size) {
+        //   /* We have already sent all our data; get more */
+        //   audio_size = audio_decode_frame(aCodecCtx, audio_buf, sizeof(audio_buf));
+        //   if(audio_size < 0) {
+        //   	/* If error, output silence */
+        //   	audio_buf_size = 1024; // arbitrary?
+        //   	memset(audio_buf, 0, audio_buf_size);
+        //   } else {
+    	  //      audio_buf_size = audio_size;
+        //   }
+        //   audio_buf_index = 0;
+        // }
+        // len1 = audio_buf_size - audio_buf_index;
+        // if(len1 > len){
+        //   len1 = len;
+        // }
+        //memcpy(stream, (uint8_t *)audio_buf + audio_buf_index, len1);
+        //memcpy(stream, audio_buf + audio_buf_index, len1);
+        //memcpy(audioData->left, audio_buf + audio_buf_index, len1);
+        //audioData->size_left = len1;
+        //memcpy(audio->right, frame.data[1], data_size);
+
+        //len -= 128;
+        //audioData->left += len1;
+        //audio_buf_index += len1;
+      //}
+    }
+
+    void Destroy(){
+      //avcodec_close(aCodecCtxOrig);
+      //avcodec_close(aCodecCtx);
+    }
+
+    void HandleOKCallback(){
+      v8::Local<v8::Value> argv[] = {
+        Nan::CopyBuffer((char *)audioData->left, audioData->size_left).ToLocalChecked(),
+        //Nan::CopyBuffer((char *)audioData->right, audioData->size_right).ToLocalChecked()
+        //Nan::New<Integer>(5),
+        Nan::New<Integer>(5)
+      };
+      callback->Call(2, argv);
+      delete audioData;
+    }
+
+   private:
+     int len;
+    //int milliseconds;
+  };
 
   class QueueWorker : public AsyncWorker {
    public:
@@ -140,21 +359,21 @@ namespace extracast {
     void Execute () {
       //Sleep(1000);
 
-      fprintf(stderr, "queue size: %d\n", videoq.nb_packets);
 
       if(videoq.nb_packets > 0){
 
         AVPacket pkt1, *packet = &pkt1;
         int frameFinished;
-        double pts;
 
+        AVFrame *pFrameCropped;
+        pFrameCropped = av_frame_alloc();
         pFrame = av_frame_alloc();
         yuv = new YUVImage;
 
         int i=0;
         for(;;) {
           if(shouldQuit){
-            fprintf(stderr, "no more frames!\n");
+            fprintf(stderr, "quit ivoked!\n");
             break;
           }
           if(packet_queue_get(&videoq, packet, 1) < 0) {
@@ -164,12 +383,22 @@ namespace extracast {
           }
           //fprintf(stderr, "decode...%d\n", packet);
 
+          vpts=0;
 
           avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, packet);
+
+          if((vpts = av_frame_get_best_effort_timestamp(pFrame)) == AV_NOPTS_VALUE) {
+            vpts = 0;
+          }
+          vpts *= av_q2d(pFormatCtx->streams[videoStream]->time_base);
+
+
           if(frameFinished) {
+            //int *color[3] = { 255, 100, 50 };
+            //av_picture_pad((AVPicture *)pFrameCropped, (AVPicture *)pFrame, height, width, pix_fmt, 0, 0, 0, 0, color);
             //fprintf(stderr, "decoded !\n");
-            avFrameCopySize = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
-            sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
+            avFrameCopySize = avpicture_get_size(pix_fmt, owidth, oheight);
+            sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, height, avFrameCopy->data, avFrameCopy->linesize);
             extractYUV();
             //got a frame.. call it back now
             break;
@@ -187,66 +416,14 @@ namespace extracast {
         fprintf(stderr, "no more packets...\n");
       }
 
-    //   for(;;) {
-    //     if(packet_queue_get(&videoq, packet, 1) < 0) {
-    //       // means we quit getting packets
-    //       fprintf(stderr, "packet get!\n");
-    //       break;
-    //     }
-    //
-    //     fprintf(stderr, "decode...%d\n", i);
-    //     avcodec_decode_video2(pCodecCtx, pFrameRead, &frameFinished, packet);
-    // //
-    // //     if(packet->dts == AV_NOPTS_VALUE && pFrameRead->opaque && *(uint64_t*)pFrameRead->opaque != AV_NOPTS_VALUE) {
-    // //       pts = *(uint64_t *)pFrameRead->opaque;
-    // //     } else if(packet->dts != AV_NOPTS_VALUE) {
-    // //       pts = packet->dts;
-    // //     } else {
-    // //       pts = 0;
-    // //     }
-    // //     pts *= av_q2d(pFormatCtx->streams[videoStream]->time_base);
-    // //     //fprintf(stderr, "pts %d\n", (int)pts);
-    // //
-    // //     // Did we get a video frame?
-    // //
-    //     if(frameFinished) {
-    //       fprintf(stderr, "frame !\n");
-    //       Local<Value> argv[] = {
-    //           Nan::New("Frame!").ToLocalChecked()
-    //       };
-    //       callback->Call(1, argv);
-    //
-    //       break;
-    //       // avFrameCopySize = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
-    //       // sws_scale(sws_ctx, (uint8_t const * const *)pFrameRead->data, pFrameRead->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
-    //       // extractYUV();
-    //       //
-    //       // v8::Local<v8::Value> argv[] = {
-    //       //   //Nan::New("ping").ToLocalChecked(), // event name
-    //       //   Nan::CopyBuffer((char *)yuv->avY, yuv->size_y).ToLocalChecked(),
-    //       //   Nan::CopyBuffer((char *)yuv->avU, yuv->size_u).ToLocalChecked(),
-    //       //   Nan::CopyBuffer((char *)yuv->avV, yuv->size_v).ToLocalChecked(),
-    //       //   Nan::New<Integer>(yuv->pitchY),
-    //       //   Nan::New<Integer>(yuv->pitchU),
-    //       //   Nan::New<Integer>(yuv->pitchV)
-    //       //   //Nan::New<Integer>(width),
-    //       //   //Nan::New<Integer>(height)
-    //       // };
-    //       // callback->Call(6, argv);
-    //       //return frame?
-    // //      info.GetReturnValue().Set(Nan::New<String>("OK").ToLocalChecked());
-    //   //     /pts = synchronize_video(is, pFrame, pts);
-    //   //     if(queue_picture(is, pFrame, pts) < 0) {
-    //   // break;
-    //   //     }
-    //     }
-    //   }
-    //
-    //
-    //   delete yuv;
 
     }
-
+    // void Destroy(){
+    //   // Close the codecs
+    //   avcodec_close(pCodecCtxOrig);
+    //   // Close the codec
+    //   avcodec_close(pCodecCtx);
+    // }
     void HandleOKCallback(){
       v8::Local<v8::Value> argv[] = {
         Nan::CopyBuffer((char *)yuv->avY, yuv->size_y).ToLocalChecked(),
@@ -255,9 +432,10 @@ namespace extracast {
         Nan::New<Integer>(yuv->pitchY),
         Nan::New<Integer>(yuv->pitchU),
         Nan::New<Integer>(yuv->pitchV),
-        Nan::New<Integer>(videoq.nb_packets)
+        Nan::New<Integer>(videoq.nb_packets),
+        Nan::New<Number>(vpts)
       };
-      callback->Call(7, argv);
+      callback->Call(8, argv);
       delete yuv;
     }
 
@@ -275,125 +453,99 @@ namespace extracast {
 
 
     void Execute (const AsyncProgressWorker::ExecutionProgress& progress) {
+      //video stuff
 
-          // Find the decoder for the video stream
-          pCodec=avcodec_find_decoder(pCodecCtxOrig->codec_id);
-          if(pCodec==NULL) {
-            fprintf(stderr, "Unsupported codec!\n");
-            exit(-1);
+      // Find the decoder for the video stream
+      pCodec=avcodec_find_decoder(pCodecCtxOrig->codec_id);
+      if(pCodec==NULL) {
+        fprintf(stderr, "Unsupported codec!\n");
+        exit(-1);
+      }
+
+      // Copy context
+      pCodecCtx = avcodec_alloc_context3(pCodec);
+      if(avcodec_copy_context(pCodecCtx, pCodecCtxOrig) != 0) {
+        fprintf(stderr, "Couldn't copy codec context");
+        exit(-1);
+      }
+
+      // Open codec
+      if(avcodec_open2(pCodecCtx, pCodec, NULL)<0){
+        fprintf(stderr, "find videoStream failed\n");
+      }
+
+
+      // Allocate video frame
+      //pFrame = av_frame_alloc();
+      //avFrameYUV
+      avFrameCopy = av_frame_alloc();
+
+
+      int size = avpicture_get_size(pix_fmt, owidth, oheight);
+      uint8_t* buffer = (uint8_t*)av_malloc(size);
+
+      avpicture_fill((AVPicture *)avFrameCopy, buffer, pix_fmt, owidth, oheight);
+
+
+      // initialize SWS context for software scaling
+      sws_ctx = sws_getContext(
+           pCodecCtx->width,
+           pCodecCtx->height,
+           pCodecCtx->pix_fmt,
+           owidth,
+           oheight,
+           pix_fmt,
+           SWS_BILINEAR,
+           NULL,
+           NULL,
+           NULL
+      );
+      //pCodecCtx->get_buffer2 = our_get_buffer;
+      //pCodecCtx->release_buffer = our_release_buffer;
+
+      //v8::Local<v8::Object> em = UnwrapPointer(r->emitter);
+
+      AVPacket pkt1, *packet = &pkt1;
+      frameIndex=0;
+      for(;;) {
+        // seek stuff goes here
+        //if(audioq.size > MAX_AUDIOQ_SIZE || videoq.size > MAX_VIDEOQ_SIZE) {
+        if(videoq.size > MAX_VIDEOQ_SIZE) {
+          //fprintf(stderr, "max queue size.. waiting 10ms %d\n", i);
+          Sleep(100); //sleep for a second?
+          continue;
+        }
+
+        if(av_read_frame(pFormatCtx, packet) < 0) {
+          if(pFormatCtx->pb->error == 0) {
+            //fprintf(stderr, "no error.. sleeping %d\n", i);
+            continue;
+    	       //Sleep(100); /* no error; wait for user input */
+             //continue;
+          } else {
+    	       break;
           }
+        }
 
-          // Copy context
-          pCodecCtx = avcodec_alloc_context3(pCodec);
-          if(avcodec_copy_context(pCodecCtx, pCodecCtxOrig) != 0) {
-            fprintf(stderr, "Couldn't copy codec context");
-            exit(-1);
-          }
+        // Is this a packet from the video stream?
+        if(packet->stream_index == videoStream) {
+          frameIndex++;
+          packet_queue_put(&videoq, packet);
+        // } else if(packet->stream_index == is->audioStream) {
+        //   packet_queue_put(&is->audioq, packet);
+        } else if(packet->stream_index == audioStream) {
+          packet_queue_put(&audioq, packet);
+        } else {
+          //fprintf(stderr, "free: %d\n", i);
+          av_free_packet(packet);
+        }
+        progress.Signal();
+        //fprintf(stderr, "frame: %d\n", frameIndex);
+        //progress.Send(reinterpret_cast<const char*>(&i), sizeof(int));
 
-          // Open codec
-          if(avcodec_open2(pCodecCtx, pCodec, NULL)<0){
-            fprintf(stderr, "find videoStream failed\n");
-          }
+      }
 
-
-          // Allocate video frame
-          //pFrame = av_frame_alloc();
-          //avFrameYUV
-          avFrameCopy = av_frame_alloc();
-
-          width = pCodecCtx->width;
-          height = pCodecCtx->height;
-
-          int size = avpicture_get_size(pix_fmt, width, height);
-          uint8_t* buffer = (uint8_t*)av_malloc(size);
-
-          avpicture_fill((AVPicture *)avFrameCopy, buffer, pix_fmt, width, height);
-
-          // initialize SWS context for software scaling
-          sws_ctx = sws_getContext(height,
-               height,
-               pCodecCtx->pix_fmt,
-               pCodecCtx->width,
-               pCodecCtx->height,
-               pix_fmt,
-               SWS_BILINEAR,
-               NULL,
-               NULL,
-               NULL
-          );
-          //pCodecCtx->get_buffer2 = our_get_buffer;
-          //pCodecCtx->release_buffer = our_release_buffer;
-
-          //v8::Local<v8::Object> em = UnwrapPointer(r->emitter);
-
-          AVPacket pkt1, *packet = &pkt1;
-          frameIndex=0;
-          for(;;) {
-            // seek stuff goes here
-            if(videoq.size > MAX_VIDEOQ_SIZE) {
-              //fprintf(stderr, "max queue size.. waiting 10ms %d\n", i);
-              Sleep(100); //sleep for a second?
-              continue;
-            }
-
-            if(av_read_frame(pFormatCtx, packet) < 0) {
-              if(pFormatCtx->pb->error == 0) {
-                //fprintf(stderr, "no error.. sleeping %d\n", i);
-                continue;
-        	       //Sleep(100); /* no error; wait for user input */
-                 //continue;
-              } else {
-        	       break;
-              }
-            }
-
-            // Is this a packet from the video stream?
-            if(packet->stream_index == videoStream) {
-              frameIndex++;
-              packet_queue_put(&videoq, packet);
-              progress.Signal();
-            // } else if(packet->stream_index == is->audioStream) {
-            //   packet_queue_put(&is->audioq, packet);
-            } else {
-              //fprintf(stderr, "free: %d\n", i);
-              av_free_packet(packet);
-            }
-            //fprintf(stderr, "frame: %d\n", frameIndex);
-            //progress.Send(reinterpret_cast<const char*>(&i), sizeof(int));
-
-          }
-
-
-          shouldQuit=1;
-          // i=0;
-          // while(av_read_frame(pFormatCtx, &packet)>=0) {
-          // //if(av_read_frame(pFormatCtx, &packet) >=0){
-          //    // Is this a packet from the video stream?
-          //    if(packet.stream_index==videoStream) {
-          //      // Decode video frame
-          //      avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
-          //      if(frameFinished) {
-          //        if(++i<=240){
-          //          fprintf(stderr, "frame: %d\n", i);
-          //
-          //          //progress.Send(reinterpret_cast<const char*>(&i), sizeof(int));
-          //
-          //         avFrameCopySize = avpicture_get_size(pix_fmt, pCodecCtx->width, pCodecCtx->height);
-          //
-          //          sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, avFrameCopy->data, avFrameCopy->linesize);
-          //
-          //          extractYUV();
-          //
-          //          //progress.Send(reinterpret_cast<const char*>(&i), sizeof(int));
-          //          progress.Signal();
-          //
-          //          av_free_packet(&packet);
-          //        }
-          //      }
-          //    }
-          // }
-
-          //delete yuv;
+      //delete yuv;
     }
     void HandleOKCallback(){
       v8::Local<v8::Value> argv[] = {
@@ -529,19 +681,126 @@ namespace extracast {
       exit(-1);
     }
 
+    av_dump_format(pFormatCtx, 0, in, 0);
+
 
     videoStream=-1;
+    audioStream=-1;
     for(i=0; i<pFormatCtx->nb_streams; i++) {
       if(pFormatCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_VIDEO && videoStream < 0) {
         videoStream=i;
+      }
+      if(pFormatCtx->streams[i]->codec->codec_type==AVMEDIA_TYPE_AUDIO &&
+         audioStream < 0) {
+        audioStream=i;
       }
     }
     if(videoStream==-1){
       fprintf(stderr, "find videoStream failed\n");
       exit(-1);
     }
+    if(audioStream==-1){
+      fprintf(stderr, "find audioStream failed\n");
+    }
 
     pCodecCtxOrig=pFormatCtx->streams[videoStream]->codec;
+
+    aCodecCtxOrig=pFormatCtx->streams[audioStream]->codec;
+
+    width = pCodecCtxOrig->width;
+    height = pCodecCtxOrig->height;
+
+
+
+    //audio stuff
+    aCodec = avcodec_find_decoder(aCodecCtxOrig->codec_id);
+    if(!aCodec) {
+      fprintf(stderr, "Unsupported codec!\n");
+      exit(-1);
+    }
+
+    // Copy context
+    aCodecCtx = avcodec_alloc_context3(aCodec);
+    if(avcodec_copy_context(aCodecCtx, aCodecCtxOrig) != 0) {
+      fprintf(stderr, "Couldn't copy codec context");
+      exit(-1); // Error copying codec context
+    }
+
+    avcodec_open2(aCodecCtx, aCodec, NULL);
+    packet_queue_init(&audioq);
+
+
+
+    float aspect_ratio;
+    if(pCodecCtxOrig->sample_aspect_ratio.num == 0) {
+      aspect_ratio = 0;
+    } else {
+      aspect_ratio = av_q2d(pCodecCtxOrig->sample_aspect_ratio) * pCodecCtxOrig->width / pCodecCtxOrig->height;
+    }
+    if(aspect_ratio <= 0.0) {
+      aspect_ratio = (float)pCodecCtxOrig->width / (float)pCodecCtxOrig->height;
+    }
+
+    //attempt to fix power-of-two webgl issues with odd halfed U/V strides
+    owidth = width;
+    oheight = height;
+
+    int whalf = width / 2;
+    if(whalf % 2 != 0){
+      int nw = (whalf + 1) * 2; //(ceil(whalf/2)*2)*2;
+      //int nh = ceil((height * (nw / width))/2)*2;
+      int nh = floor(floor((float)nw / aspect_ratio)/2)*2;
+      fprintf(stderr, "ne wheight %d\n", nh);
+      owidth = nw;
+      oheight = nh;
+    }
+    // //width = 856;
+    // fprintf(stderr, "width is now %d, height is now: %d\n", width, height);
+    // int hhalf = width/2;
+    // if(whalf % 2 != 0){
+    //   height = (ceil(whalf/2) * 2) * 2;
+    // }
+
+
+    // int screen_w = pCodecCtxOrig->width;
+    // int screen_h = pCodecCtxOrig->width;
+    // int w, h, x, y;
+    //
+    // h = screen_h;
+    // w = ((int)rint(h * aspect_ratio)) & -3;
+    // if(w > screen_w) {
+    //   w = screen_w;
+    //   h = ((int)rint(w / aspect_ratio)) & -3;
+    // }
+    // x = (screen_w - w) / 2;
+    // y = (screen_h - h) / 2;
+    //
+    // rect.x = x;
+    // rect.y = y;
+    // rect.w = w;
+    // rect.h = h;
+    // Local<Object> pictureObj = Nan::New<Object>();
+    // pictureObj->Set(Nan::New<String>("screen_w").ToLocalChecked(), Nan::New<Integer>(screen_w));
+    // pictureObj->Set(Nan::New<String>("screen_h").ToLocalChecked(), Nan::New<Integer>(screen_h));
+    // pictureObj->Set(Nan::New<String>("rect_w").ToLocalChecked(), Nan::New<Integer>(w));
+    // pictureObj->Set(Nan::New<String>("rect_h").ToLocalChecked(), Nan::New<Integer>(h));
+    // pictureObj->Set(Nan::New<String>("rect_x").ToLocalChecked(), Nan::New<Integer>(x));
+    // pictureObj->Set(Nan::New<String>("rect_y").ToLocalChecked(), Nan::New<Integer>(y));
+
+
+
+    Local<Object> obj = Nan::New<Object>();
+    obj->Set(Nan::New<String>("filename").ToLocalChecked(), Nan::New<String>(pFormatCtx->filename).ToLocalChecked());
+    obj->Set(Nan::New<String>("duration").ToLocalChecked(), Nan::New<String>(time_value_string(val_str, sizeof(val_str), pFormatCtx->duration)).ToLocalChecked());
+    obj->Set(Nan::New<String>("width").ToLocalChecked(), Nan::New<Integer>(owidth));
+    obj->Set(Nan::New<String>("height").ToLocalChecked(), Nan::New<Integer>(oheight));
+    obj->Set(Nan::New<String>("aspect_ratio").ToLocalChecked(), Nan::New<Number>(aspect_ratio));
+
+    obj->Set(Nan::New<String>("sample_rate").ToLocalChecked(), Nan::New<Integer>(aCodecCtx->sample_rate));
+    obj->Set(Nan::New<String>("channels").ToLocalChecked(), Nan::New<Integer>(aCodecCtx->channels));
+    obj->Set(Nan::New<String>("samples").ToLocalChecked(), Nan::New<Integer>(SDL_AUDIO_BUFFER_SIZE));
+    //obj->Set(Nan::New<String>("picture").ToLocalChecked(), pictureObj);
+//    wanted_spec.userdata = aCodecCtx;
 
   //   // return object
     // info.GetReturnValue().Set(obj);
@@ -549,17 +808,18 @@ namespace extracast {
 
     Nan:: HandleScope scope;
     Local<Value> argv[] = {
-        Nan::New(pFormatCtx->filename).ToLocalChecked(),
-        Nan::New(time_value_string(val_str, sizeof(val_str), pFormatCtx->duration)).ToLocalChecked(),
-        Nan::New(pCodecCtxOrig->width),
-        Nan::New(pCodecCtxOrig->height),
-        Nan::New(pFormatCtx->iformat->name).ToLocalChecked(),
-        Nan::New(pFormatCtx->iformat->long_name).ToLocalChecked()
+        // Nan::New(pFormatCtx->filename).ToLocalChecked(),
+        // Nan::New(time_value_string(val_str, sizeof(val_str), pFormatCtx->duration)).ToLocalChecked(),
+        // Nan::New(pCodecCtxOrig->width),
+        // Nan::New(pCodecCtxOrig->height),
+        // Nan::New(pFormatCtx->iformat->name).ToLocalChecked(),
+        // Nan::New(pFormatCtx->iformat->long_name).ToLocalChecked(),
+        obj
     };
 
     // Nan::Call(callback->GetFunction(), GetCurrentContext()->Global(), 1, argv);//callback->Call(1, argv);
 
-    callback->Call(6, argv);
+    callback->Call(1, argv);
 
     //uv_queue_work(uv_default_loop(), &request->req, ec_quick_probe, (uv_after_work_cb)ec_decode_buffer_after);
 
@@ -567,7 +827,7 @@ namespace extracast {
   }
 
   // emits ping event
-  NAN_METHOD(Emitter::Ping) {
+  NAN_METHOD(Emitter::Decode) {
 
 //    DecodeRequest *request = new DecodeRequest;
     //request->input = input;
@@ -593,6 +853,16 @@ namespace extracast {
 
     Callback *callback = new Callback(info[0].As<v8::Function>());
     AsyncQueueWorker(new QueueWorker(callback));
+
+  }
+  NAN_METHOD(Emitter::ReadAudio) {
+
+    //int len = Nan::New<Integer>(info[0]);
+    int len = info[0]->Uint32Value();
+
+    Callback *callback = new Callback(info[1].As<v8::Function>());
+
+    AsyncQueueWorker(new AudioWorker(callback, len));
 
   }
 
@@ -622,13 +892,6 @@ namespace extracast {
     // set a circular pointer so we can get the "encode_req" back later
     fprintf(stderr, "get buffered frames: %d\n", frameIndex);
 
-    //decode_video();
-
-    //uv_queue_work(uv_default_loop(), &request->req, ec_decode_buffer_async, (uv_after_work_cb)ec_decode_buffer_after);
-
-    // v8::Local<v8::Value> returnValue = Nan::CopyBuffer((char*)avFrameYUV->data[0], avFrameYUVSize).ToLocalChecked();
-    // info.GetReturnValue().Set(returnValue);
-
   }
 
 
@@ -636,15 +899,7 @@ namespace extracast {
 
   void ec_decode_buffer_async (uv_work_t *req) {
     DecodeRequest *r = (DecodeRequest *)req->data;
-    fprintf(stderr, "buffer!");
 
-
-
-    //r->yuv_y = Nan::CopyBuffer((char*)avFrameYUV->data[0], avFrameYUVSize).ToLocalChecked();
-    //av_init_packet(&packet);
-    //return array of frames?
-    //r->rtn = avFrameYUV; //Nan::New<String>("OK").ToLocalChecked();
-    //r->rtn = 5;
   }
 
 
@@ -658,9 +913,17 @@ namespace extracast {
     yuv->avU = avFrameCopy->data[1];
     yuv->avV = avFrameCopy->data[2];
 
-    yuv->size_y = (avFrameCopy->linesize[0] * pCodecCtx->height);
-    yuv->size_u = (avFrameCopy->linesize[1] * pCodecCtx->height / 2);
-    yuv->size_v = (avFrameCopy->linesize[2] * pCodecCtx->height / 2);
+    // if(yuv->pitchU % 2 != 0){
+    //   width+=2;
+    //   yuv->pitchY+=2;
+    //   yuv->pitchU+=1;
+    //   yuv->pitchV+=1;
+    // }
+
+
+    yuv->size_y = (yuv->pitchY * pCodecCtx->height);
+    yuv->size_u = (yuv->pitchU * pCodecCtx->height / 2);
+    yuv->size_v = (yuv->pitchV * pCodecCtx->height / 2);
 
   }
   void ec_decode_buffer_after (uv_work_t *req) {
@@ -678,8 +941,8 @@ namespace extracast {
       Nan::New<Integer>(yuv->pitchY),
       Nan::New<Integer>(yuv->pitchU),
       Nan::New<Integer>(yuv->pitchV),
-      Nan::New<Integer>(width),
-      Nan::New<Integer>(height)
+      Nan::New<Integer>(owidth),
+      Nan::New<Integer>(oheight)
     };
 
     //Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, ((v8::Local<v8::Value>)argv));
@@ -692,36 +955,15 @@ namespace extracast {
     if (try_catch.HasCaught()) {
       FatalException(try_catch);
     }
-    // DecodeRequest *r = (DecodeRequest *)req->data;
-    //
-    // Handle<Value> argv[1];
-    // argv[0] = Nan::New<v8::Object>(r->rtn);
-    // //
-    // Nan::TryCatch try_catch;
-    // //Nan::CopyBuffer((char*)bmp->pixels, sizeof(bmp->pixels)).ToLocalChecked();
-    // //v8::Local<v8::Value> returnValue = Nan::CopyBuffer((char*)r->rtn, r->rsize).ToLocalChecked();
-    //
-    // // v8::Local<v8::Value> argv[] = {
-    // //   r->rtn
-    // // };
-    // Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 1, argv);
-    //
-    // // cleanup
-    // r->callback.Reset();
-    // delete r;
-    //
-    // if (try_catch.HasCaught()) {
-    //   FatalException(try_catch);
-    // }
+
   }
   NAN_METHOD(ec_teardown){
-    fprintf(stderr, "destroy \n");
-    // Free the YUV frame
-    //av_frame_free(&pFrame);
     // Close the codecs
     avcodec_close(pCodecCtxOrig);
     // Close the codec
     avcodec_close(pCodecCtx);
+    avcodec_close(aCodecCtxOrig);
+    avcodec_close(aCodecCtx);
 
     // Close the video file
     avformat_close_input(&pFormatCtx);
@@ -752,8 +994,9 @@ namespace extracast {
 
     t->SetClassName(Nan::New("Emitter").ToLocalChecked());
     Nan::SetPrototypeMethod(t, "open", Emitter::Open);
-    Nan::SetPrototypeMethod(t, "ping", Emitter::Ping);
+    Nan::SetPrototypeMethod(t, "decode", Emitter::Decode);
     Nan::SetPrototypeMethod(t, "readFrame", Emitter::ReadFrame);
+    Nan::SetPrototypeMethod(t, "readAudio", Emitter::ReadAudio);
 
     Nan::Set(target, Nan::New("Emitter").ToLocalChecked(), t->GetFunction());
     //Nan::SetMethod(target, "init_params", node_init_params);

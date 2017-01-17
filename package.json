@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build_electron":"node-gyp rebuild --runtime=electron --target=1.4.1 --disturl=https://atom.io/download/atom-shell --abi=50",
+    "build_electron": "node-gyp rebuild --runtime=electron --target=1.4.1 --disturl=https://atom.io/download/atom-shell --abi=50",
     "test": "echo \"Error: no test specified\" && exit 1",
     "install": "node-gyp rebuild"
   },
@@ -13,6 +13,7 @@
   "gypfile": true,
   "dependencies": {
     "nan": "^2.5.0",
+    "yuv-buffer": "^1.0.0",
     "yuv-canvas": "^1.0.0"
   }
 }

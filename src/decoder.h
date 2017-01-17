@@ -30,6 +30,12 @@ using namespace node;
 
 namespace extracast {
 
+  typedef struct AudioFrame {
+    uint8_t *left;
+    uint8_t *right;
+    size_t size_left;
+    size_t size_right;
+  };
   typedef struct YUVImage {
     // v8::Uint32 format;
     int w, h;
@@ -47,7 +53,7 @@ namespace extracast {
     size_t size_u;
     size_t size_v;
 
-  } YUVImage;
+  };
 
   void extractYUV();
 
@@ -66,11 +72,11 @@ namespace extracast {
   struct Emitter: Nan::ObjectWrap {
     static NAN_METHOD(New);
     static NAN_METHOD(Open);
-    static NAN_METHOD(Ping);
+    static NAN_METHOD(Decode);
     static NAN_METHOD(ReadFrame);
-
+    static NAN_METHOD(ReadAudio);
   };
-  
+
 
   typedef struct PacketQueue {
     AVPacketList *first_pkt, *last_pkt;
