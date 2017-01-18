@@ -155,6 +155,7 @@ LIBTOOLFLAGS_Release := \
 	-Wl,-search_paths_first
 
 LIBS := \
+	-L/usr/lib \
 	-lavformat \
 	-lavfilter \
 	-lavutil \

@@ -41,6 +41,10 @@ namespace extracast {
   AVCodecContext  *pCodecCtx = NULL;
   AVCodec         *pCodec = NULL;
   AVFrame         *pFrame = NULL;
+  AVFrame         *pFrameOut = NULL;
+  AVFrame         *pFrameCopy = NULL;
+  size_t          pFrameOutSize;
+  size_t          pFrameCopySize;
   AVPacket        packet;
 
   //uint8_t *stream;
@@ -58,6 +62,7 @@ namespace extracast {
   AVCodec         *aCodec = NULL;
   int             audioLen;
 
+
   AVPixelFormat   pix_fmt = AV_PIX_FMT_YUV420P; //AV_PIX_FMT_YUV420P; //AV_PIX_FMT_RGB24;
   int             frameFinished;
   int             shouldQuit;
@@ -69,8 +74,6 @@ namespace extracast {
 
   // AVFrame         *avFrameYUV = NULL;
   // size_t          avFrameYUVSize;
-  AVFrame         *avFrameCopy = NULL;
-  size_t          avFrameCopySize;
 
   PacketQueue     videoq;
   PacketQueue     audioq;
@@ -350,6 +353,42 @@ namespace extracast {
     //int milliseconds;
   };
 
+  int pow2roundup (int x){
+    if (x < 0)
+        return 0;
+    --x;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return x+1;
+  }
+
+  void extractYUV(){
+
+    yuv->pitchY = pFrameOut->linesize[0];
+    yuv->pitchU = pFrameOut->linesize[1];
+    yuv->pitchV = pFrameOut->linesize[2];
+
+    yuv->avY = pFrameOut->data[0];
+    yuv->avU = pFrameOut->data[1];
+    yuv->avV = pFrameOut->data[2];
+
+    // if(yuv->pitchU % 2 != 0){
+    //   width+=2;
+    //   yuv->pitchY+=2;
+    //   yuv->pitchU+=1;
+    //   yuv->pitchV+=1;
+    // }
+
+
+    yuv->size_y = (yuv->pitchY * oheight);
+    yuv->size_u = (yuv->pitchU * oheight / 2);
+    yuv->size_v = (yuv->pitchV * oheight / 2);
+
+  }
+
   class QueueWorker : public AsyncWorker {
    public:
     QueueWorker(Callback *callback)
@@ -365,8 +404,8 @@ namespace extracast {
         AVPacket pkt1, *packet = &pkt1;
         int frameFinished;
 
-        AVFrame *pFrameCropped;
-        pFrameCropped = av_frame_alloc();
+
+
         pFrame = av_frame_alloc();
         yuv = new YUVImage;
 
@@ -394,11 +433,18 @@ namespace extracast {
 
 
           if(frameFinished) {
-            //int *color[3] = { 255, 100, 50 };
+            int color[3] = { 255, 0, 255 };
             //av_picture_pad((AVPicture *)pFrameCropped, (AVPicture *)pFrame, height, width, pix_fmt, 0, 0, 0, 0, color);
             //fprintf(stderr, "decoded !\n");
-            avFrameCopySize = avpicture_get_size(pix_fmt, owidth, oheight);
-            sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, height, avFrameCopy->data, avFrameCopy->linesize);
+            //av_picture_crop((AVPicture *)pFrameCropped, (AVPicture *)pFrame, pix_fmt, height, width);
+
+            //pFrameCopySize = avpicture_get_size(pix_fmt, owidth, oheight);
+            //pFrameOutSize = avpicture_get_size(pix_fmt, owidth, oheight);
+
+
+            sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, height, pFrameOut->data, pFrameOut->linesize);
+            //av_picture_pad((AVPicture *)pFrameOut, (AVPicture *)pFrameCopy, oheight, owidth, pix_fmt, 0, 0, 0, (owidth - width), color);
+
             extractYUV();
             //got a frame.. call it back now
             break;
@@ -478,19 +524,23 @@ namespace extracast {
       // Allocate video frame
       //pFrame = av_frame_alloc();
       //avFrameYUV
-      avFrameCopy = av_frame_alloc();
-
+      pFrameCopy = av_frame_alloc();
+      pFrameOut = av_frame_alloc();
 
       int size = avpicture_get_size(pix_fmt, owidth, oheight);
       uint8_t* buffer = (uint8_t*)av_malloc(size);
 
-      avpicture_fill((AVPicture *)avFrameCopy, buffer, pix_fmt, owidth, oheight);
+      int sizeout = avpicture_get_size(pix_fmt, owidth, oheight);
+      uint8_t* bufferout = (uint8_t*)av_malloc(sizeout);
+
+      avpicture_fill((AVPicture *)pFrameCopy, buffer, pix_fmt, owidth, oheight);
+      avpicture_fill((AVPicture *)pFrameOut, bufferout, pix_fmt, owidth, oheight);
 
 
       // initialize SWS context for software scaling
       sws_ctx = sws_getContext(
-           pCodecCtx->width,
-           pCodecCtx->height,
+           owidth,
+           oheight,
            pCodecCtx->pix_fmt,
            owidth,
            oheight,
@@ -742,18 +792,37 @@ namespace extracast {
     }
 
     //attempt to fix power-of-two webgl issues with odd halfed U/V strides
-    owidth = width;
-    oheight = height;
+    //owidth = pow2roundup(width);
+    owidth = pCodecCtxOrig->coded_width;
+    oheight = pCodecCtxOrig->coded_height;
 
-    int whalf = width / 2;
-    if(whalf % 2 != 0){
-      int nw = (whalf + 1) * 2; //(ceil(whalf/2)*2)*2;
-      //int nh = ceil((height * (nw / width))/2)*2;
-      int nh = floor(floor((float)nw / aspect_ratio)/2)*2;
-      fprintf(stderr, "ne wheight %d\n", nh);
-      owidth = nw;
-      oheight = nh;
-    }
+    // int whalf = width / 2;
+    // if(owidth % 8 != 0)
+    //   owidth = (ceil(owidth / 8) * 8);
+    //   oheight = height + 2;
+
+    //if(whalf % 4 != 0)
+    //  owidth = (whalf + 1) * 2;
+
+    // "width": 1280,
+    // "height": 720,
+    // "coded_width": 1280,
+    // "coded_height": 720,
+    fprintf(stderr, "codec: %dx%d %dx%d\n", pCodecCtxOrig->width, pCodecCtxOrig->height, pCodecCtxOrig->coded_width, pCodecCtxOrig->coded_height);
+    fprintf(stderr, "orig: %dx%d %dx%d\n", width, height, owidth, oheight);
+    //   //pow2roundup()
+    //   // int nw = width - 2;
+    //   int nw = (whalf + 1) * 2; //(ceil(whalf/2)*2)*2;
+    //   //int nh = ceil((height * (nw / width))/2)*2;
+    //   //fprintf(stderr, "new width %d\n", nw);
+    //   int nh = floor(floor((float)nw / aspect_ratio)/2)*2;
+    //   //fprintf(stderr, "new height %d\n", nh);
+    //   owidth = nw;
+    //   //oheight = nh;
+    // }
+
+    //oheight = round(round((float)owidth / aspect_ratio)/2)*2;
+
     // //width = 856;
     // fprintf(stderr, "width is now %d, height is now: %d\n", width, height);
     // int hhalf = width/2;
@@ -792,9 +861,16 @@ namespace extracast {
     Local<Object> obj = Nan::New<Object>();
     obj->Set(Nan::New<String>("filename").ToLocalChecked(), Nan::New<String>(pFormatCtx->filename).ToLocalChecked());
     obj->Set(Nan::New<String>("duration").ToLocalChecked(), Nan::New<String>(time_value_string(val_str, sizeof(val_str), pFormatCtx->duration)).ToLocalChecked());
-    obj->Set(Nan::New<String>("width").ToLocalChecked(), Nan::New<Integer>(owidth));
-    obj->Set(Nan::New<String>("height").ToLocalChecked(), Nan::New<Integer>(oheight));
+    obj->Set(Nan::New<String>("width").ToLocalChecked(), Nan::New<Integer>(width));
+    obj->Set(Nan::New<String>("height").ToLocalChecked(), Nan::New<Integer>(height));
+    obj->Set(Nan::New<String>("coded_width").ToLocalChecked(), Nan::New<Integer>(owidth));
+    obj->Set(Nan::New<String>("coded_height").ToLocalChecked(), Nan::New<Integer>(oheight));
     obj->Set(Nan::New<String>("aspect_ratio").ToLocalChecked(), Nan::New<Number>(aspect_ratio));
+    //obj->Set(Nan::New<String>("time_base").ToLocalChecked(), Nan::New<String>(pFormatCtx->streams[videoStream]->time_base).ToLocalChecked());
+    //obj->Set(Nan::New<String>("r_frame_rate").ToLocalChecked(), Nan::New<String>(pFormatCtx->streams[videoStream]->r_frame_rate).ToLocalChecked());
+    //obj->Set(Nan::New<String>("avg_frame_rate").ToLocalChecked(), Nan::New<String>(pFormatCtx->streams[videoStream]->avg_frame_rate).ToLocalChecked());
+    obj->Set(Nan::New<String>("nb_frames").ToLocalChecked(), Nan::New<Number>(pFormatCtx->streams[videoStream]->nb_frames));
+
 
     obj->Set(Nan::New<String>("sample_rate").ToLocalChecked(), Nan::New<Integer>(aCodecCtx->sample_rate));
     obj->Set(Nan::New<String>("channels").ToLocalChecked(), Nan::New<Integer>(aCodecCtx->channels));
@@ -903,29 +979,6 @@ namespace extracast {
   }
 
 
-  void extractYUV(){
-
-    yuv->pitchY = avFrameCopy->linesize[0];
-    yuv->pitchU = avFrameCopy->linesize[1];
-    yuv->pitchV = avFrameCopy->linesize[2];
-
-    yuv->avY = avFrameCopy->data[0];
-    yuv->avU = avFrameCopy->data[1];
-    yuv->avV = avFrameCopy->data[2];
-
-    // if(yuv->pitchU % 2 != 0){
-    //   width+=2;
-    //   yuv->pitchY+=2;
-    //   yuv->pitchU+=1;
-    //   yuv->pitchV+=1;
-    // }
-
-
-    yuv->size_y = (yuv->pitchY * pCodecCtx->height);
-    yuv->size_u = (yuv->pitchU * pCodecCtx->height / 2);
-    yuv->size_v = (yuv->pitchV * pCodecCtx->height / 2);
-
-  }
   void ec_decode_buffer_after (uv_work_t *req) {
     Nan::HandleScope scope;
     DecodeRequest *r = (DecodeRequest *)req->data;
@@ -940,9 +993,9 @@ namespace extracast {
       Nan::CopyBuffer((char *)yuv->avV, yuv->size_v).ToLocalChecked(),
       Nan::New<Integer>(yuv->pitchY),
       Nan::New<Integer>(yuv->pitchU),
-      Nan::New<Integer>(yuv->pitchV),
-      Nan::New<Integer>(owidth),
-      Nan::New<Integer>(oheight)
+      Nan::New<Integer>(yuv->pitchV)
+      //Nan::New<Integer>(owidth),
+      //Nan::New<Integer>(oheight)
     };
 
     //Nan::New(r->callback)->Call(Nan::GetCurrentContext()->Global(), 8, ((v8::Local<v8::Value>)argv));

@@ -11,7 +11,7 @@
             "<!(node -e \"require('nan')\")"
         ],
         "libraries": [
-            #"-L/usr/lib",
+            "-L/usr/lib",
             #"-L/usr/lib",
             "-lavformat","-lavformat","-lavfilter","-lavutil","-lavcodec","-lswscale","-lz", "-lm"
         ]
