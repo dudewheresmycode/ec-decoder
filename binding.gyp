@@ -7,11 +7,11 @@
             "src/decoder.cc"
         ],
         'include_dirs': [
-            './usr',
+            './usr/include',
             "<!(node -e \"require('nan')\")"
         ],
         "libraries": [
-            "-L/usr/lib",
+            "-L./usr/lib/",
             #"-L/usr/lib",
             "-lavformat","-lavformat","-lavfilter","-lavutil","-lavcodec","-lswscale","-lz", "-lm"
         ]
